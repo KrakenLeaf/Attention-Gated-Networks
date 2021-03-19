@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.networks_other import init_weights
-
+from models.deformable_convs.deform_conv_test2 import DeformConv3D
 
 class conv2DBatchNorm(nn.Module):
     def __init__(self, in_channels, n_filters, k_size,  stride, padding, bias=True):
@@ -96,20 +96,20 @@ class unetConv2(nn.Module):
 
 
 class UnetConv3(nn.Module):
-    def __init__(self, in_size, out_size, is_batchnorm, kernel_size=(3,3,1), padding_size=(1,1,0), init_stride=(1,1,1)):
+    def __init__(self, in_size, out_size, is_batchnorm, kernel_size=(3,3,1), padding_size=(1,1,0), init_stride=(1,1,1), init_dilation=(1,1,1)):
         super(UnetConv3, self).__init__()
 
         if is_batchnorm:
-            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
-                                       nn.BatchNorm3d(out_size),
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size, dilation=init_dilation),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True), # OS
                                        nn.ReLU(inplace=True),)
-            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
-                                       nn.BatchNorm3d(out_size),
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size, dilation=init_dilation),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
                                        nn.ReLU(inplace=True),)
         else:
-            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
+            self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size, idilation=nit_dilation),
                                        nn.ReLU(inplace=True),)
-            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size, dilation=init_dilation),
                                        nn.ReLU(inplace=True),)
 
         # initialise the blocks
@@ -121,6 +121,470 @@ class UnetConv3(nn.Module):
         outputs = self.conv2(outputs)
         return outputs
 
+# OS: Deformable 3D convolutions
+class UnetConv3_deformable(nn.Module):
+    def __init__(self, in_size, out_size, is_batchnorm, kernel_size=3, padding_size=1):
+        super(UnetConv3_deformable, self).__init__()
+        # NOTE: For simplicity, this module assumes isotropic kernels and padding
+
+        # Offsets are learnt by a 3D convolution layer (can be a more complex network)
+        self.offsets = nn.Conv3d(in_size, 3 * kernel_size ** 3, kernel_size=kernel_size, padding=padding_size)
+
+        # off_size = 3 * kernel_size ** 3
+        # self.offsets = nn.Sequential(nn.Conv3d(in_size, off_size, kernel_size=kernel_size, padding=padding_size),
+        #                              nn.BatchNorm3d(off_size, track_running_stats=True), # OS
+        #                              nn.ReLU(inplace=True),
+        #                              nn.Conv3d(off_size, off_size, kernel_size=kernel_size,padding=padding_size),
+        #                              nn.BatchNorm3d(off_size, track_running_stats=True),  # OS
+        #                              nn.ReLU(inplace=True),
+        #                              nn.Conv3d(off_size, off_size, kernel_size=kernel_size,padding=padding_size),
+        #                              nn.BatchNorm3d(off_size, track_running_stats=True),  # OS
+        #                              nn.ReLU(inplace=True),)
+
+        self.deform_conv = DeformConv3D(in_size, out_size, kernel_size=kernel_size, padding=padding_size)
+
+        if is_batchnorm:
+            self.relu = nn.Sequential(nn.BatchNorm3d(out_size, track_running_stats=True), # OS
+                                       nn.ReLU(inplace=True),)
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
+                                       nn.ReLU(inplace=True),)
+        else:
+            self.relu = nn.ReLU(inplace=True)
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.ReLU(inplace=True),)
+
+        # initialise the blocks
+        #internal_flag = 0
+        for m in self.children():
+            # if internal_flag == 0:
+            #     # Zero weights initialization for the offsets weights - according to Jifeng et. al "Deformable Convolutional Networks"
+            #     internal_flag += 1
+            #     m.weight.data = torch.zeros_like(m.weight.data)
+            # else:
+            if not isinstance(m, DeformConv3D): # DeformConv3D is initialized from inside its init
+                init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs):
+        # Calculate offsets
+        offsets = self.offsets(inputs)
+
+        # Convolutions
+        outputs = self.relu(self.deform_conv(inputs, offsets))
+        outputs = self.conv2(outputs)
+        return outputs, offsets
+
+# OS: Dense block implementation for 3D convolutions
+class DenseBlock3D(nn.Module):
+    def __init__(self, in_size, out_size, is_batchnorm, kernel_size=(3,3,1), padding_size=(1,1,0), init_stride=(1,1,1), depth=3):
+        super(DenseBlock3D, self).__init__()
+        self.relu = nn.ReLU(inplace=False)
+        self.bn = nn.BatchNorm3d(num_features=out_size, track_running_stats=True)
+
+        self.in_size = in_size
+        self.out_size = out_size
+        self.kernel_size = kernel_size
+        self.padding_size = padding_size
+        self.init_stride = init_stride
+
+        self.is_batchnorm = is_batchnorm
+
+        # Depth of the dense block
+        # -----------------------------------
+        if depth < 1:
+            depth = 1 # Minimal depth is 1
+        self.dense_depth = depth
+
+        # Initial convolution operation on the input data
+        self.init_conv = nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size)
+
+        # Define further convolutions in a for loop
+        self.ops_dict = {}
+        for ii in range(depth - 1):
+            name = "op_{}".format(ii + 1)
+            self.ops_dict[name] = nn.Conv3d((ii + 1) * out_size, out_size, kernel_size, init_stride, padding_size).cuda()
+
+        self.batchnorm = nn.BatchNorm3d(out_size, track_running_stats=True)
+
+        if is_batchnorm:
+            # self.conv1 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+            #                            nn.BatchNorm3d(out_size),
+            #                            nn.ReLU(inplace=True),)
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
+                                       nn.ReLU(inplace=True),)
+        else:
+            # self.conv1 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+            #                            nn.ReLU(inplace=True),)
+            self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
+                                       nn.ReLU(inplace=True),)
+
+        # initialise the blocks
+        for m in self.children():
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs):
+        #outputs = self.conv1(inputs)
+        #outputs = self.conv2(outputs)
+
+        # Create 3D convolution blocks and concatenate along the channels dimension
+        dense = self.init_conv(inputs)
+        for ii in range(self.dense_depth - 1):
+            name = "op_{}".format(ii + 1)
+
+            # Batch (0) x Channels (1) x W x H x D
+            outcnn = self.relu(self.ops_dict[name](dense))
+
+            # Concatenate and relu
+            if ii == self.dense_depth - 2:
+                dense = self.relu(outcnn)
+            else:
+                dense = self.relu(torch.cat([dense, outcnn], 1))
+
+        # Apply batch normalization if required
+        if self.is_batchnorm:
+            dense = self.relu(self.batchnorm(dense))
+
+        # Apply last convolution
+        outputs = self.conv2(dense)
+
+        return outputs
+
+# OS: Spatial Transformer Block
+class STNblock(nn.Module):
+    def __init__(self, n_channels=1, input_grid_size=[96,48,192], target_grid_size=[], type='3d'):
+        super(STNblock, self).__init__()
+        '''
+        n_channels - number of input channels
+        type - '2d' 2D (2 x 3) affine transformations, 
+               '3d' 3D (3 x 4) affine transformations.
+        '''
+
+        # Output grid size
+        self.target_grid_size = target_grid_size
+        out_size = 8
+
+        # Spatial transformer localization-network
+        # TODO: this can be replaced with i.e. a dense block
+        if type.lower() == '2d':
+            self.localization = nn.Sequential(
+                nn.Conv2d(n_channels, 8, kernel_size=7),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv2d(8, 10, kernel_size=5),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True)
+            )
+        elif type.lower() == '3d':
+            self.localization = nn.Sequential(
+                nn.Conv3d(n_channels, 8, kernel_size=7),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv3d(8, 10, kernel_size=5),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True)
+            )
+
+        FCdims = 70400 #int(out_size * input_grid_size[0] * input_grid_size[1] * input_grid_size[2] / 2**4)
+        FCfinal = 32
+
+        # Regressor for the 3 * 2 affine matrix - outputs the /theta vectors
+        if type.lower() == '2d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 3 * 2)
+            )
+            self.dims = [2, 3]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+        elif type.lower() == '3d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 4 * 3)
+            )
+            self.dims = [3, 4]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def stn(self, x):
+        xs = self.localization(x)
+        # print("xs size = {}".format(xs.size()))
+        if x.dim() == 5:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3] * xs.size()[4]) # This is for 3D only
+        else:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3])
+        theta = self.fc_loc(xs)
+        # print("theta size = {}".format(theta.size()))
+        theta = theta.view(-1, self.dims[0], self.dims[1])
+        # print("theta size = {}".format(theta.size()))
+
+        grid = F.affine_grid(theta, self.target_grid_size, align_corners=False)
+        # print("grid size = {}".format(grid.size()))
+        x = F.grid_sample(x, grid, align_corners=False)
+
+        return x
+
+    def forward(self, x):
+        return self.stn(x)
+
+class STNblock_v2(nn.Module):
+    def __init__(self, n_channels=1, input_grid_size=[96,48,192], target_grid_size=[], type='3d'):
+        super(STNblock_v2, self).__init__()
+        '''
+        n_channels - number of input channels
+        type - '2d' 2D (2 x 3) affine transformations, 
+               '3d' 3D (3 x 4) affine transformations.
+        '''
+
+        # Output grid size
+        self.target_grid_size = target_grid_size
+        out_size = 8
+
+        # Spatial transformer localization-network
+        # TODO: this can be replaced with i.e. a dense block
+        if type.lower() == '2d':
+            self.localization = nn.Sequential(
+                nn.Conv2d(n_channels, 8, kernel_size=7),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv2d(8, 10, kernel_size=5),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True)
+            )
+        elif type.lower() == '3d':
+            self.localization = nn.Sequential(
+                nn.Conv3d(n_channels, 8, kernel_size=7),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv3d(8, 10, kernel_size=5),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True)
+            )
+
+        FCdims = 211200
+        FCfinal = 32
+
+        # Regressor for the 3 * 2 affine matrix - outputs the /theta vectors
+        if type.lower() == '2d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 3 * 2)
+            )
+            self.dims = [2, 3]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+        elif type.lower() == '3d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 4 * 3)
+            )
+            self.dims = [3, 4]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def stn(self, x):
+        xs = self.localization(x)
+        # print("xs size = {}".format(xs.size()))
+        if x.dim() == 5:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3] * xs.size()[4]) # This is for 3D only
+        else:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3])
+        theta = self.fc_loc(xs)
+        # print("theta size = {}".format(theta.size()))
+        theta = theta.view(-1, self.dims[0], self.dims[1])
+        # print("theta size = {}".format(theta.size()))
+
+        grid = F.affine_grid(theta, self.target_grid_size, align_corners=False)
+        # print("grid size = {}".format(grid.size()))
+        x = F.grid_sample(x, grid, align_corners=False)
+
+        return x
+
+    def forward(self, x):
+        return self.stn(x)
+
+################################################################################################
+########################### STN bolcks for unregistered T1 and FA ##############################
+################################################################################################
+class STNblock_t1_v2(nn.Module):
+    def __init__(self, n_channels=1, input_grid_size=[96,48,192], target_grid_size=[], type='3d'):
+        super(STNblock_t1_v2, self).__init__()
+        '''
+        n_channels - number of input channels
+        type - '2d' 2D (2 x 3) affine transformations, 
+               '3d' 3D (3 x 4) affine transformations.
+        '''
+
+        # Output grid size
+        self.target_grid_size = target_grid_size
+        out_size = 8
+
+        # Spatial transformer localization-network
+        # TODO: this can be replaced with i.e. a dense block
+        if type.lower() == '2d':
+            self.localization = nn.Sequential(
+                nn.Conv2d(n_channels, 8, kernel_size=7),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv2d(8, 10, kernel_size=5),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True)
+            )
+        elif type.lower() == '3d':
+            self.localization = nn.Sequential(
+                nn.Conv3d(n_channels, 8, kernel_size=7),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv3d(8, 10, kernel_size=5),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True)
+            )
+
+        FCdims = 81920
+        FCfinal = 32
+
+        # Regressor for the 3 * 2 affine matrix - outputs the /theta vectors
+        if type.lower() == '2d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 3 * 2)
+            )
+            self.dims = [2, 3]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+        elif type.lower() == '3d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 4 * 3)
+            )
+            self.dims = [3, 4]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def stn(self, x):
+        xs = self.localization(x)
+        # print("xs size = {}".format(xs.size()))
+        if x.dim() == 5:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3] * xs.size()[4]) # This is for 3D only
+        else:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3])
+        theta = self.fc_loc(xs)
+        # print("theta size = {}".format(theta.size()))
+        theta = theta.view(-1, self.dims[0], self.dims[1])
+        #print("T1: theta = {}".format(theta))
+
+        grid = F.affine_grid(theta, self.target_grid_size, align_corners=False)
+        # print("grid size = {}".format(grid.size()))
+        x = F.grid_sample(x, grid, align_corners=False)
+
+        return x, theta
+
+    def forward(self, x):
+        out, affine = self.stn(x)
+        return out, affine
+
+class STNblock_fa_v2(nn.Module):
+    def __init__(self, n_channels=1, input_grid_size=[96,48,192], target_grid_size=[], type='3d'):
+        super(STNblock_fa_v2, self).__init__()
+        '''
+        n_channels - number of input channels
+        type - '2d' 2D (2 x 3) affine transformations, 
+               '3d' 3D (3 x 4) affine transformations.
+        '''
+
+        # Output grid size
+        self.target_grid_size = target_grid_size
+        out_size = 8
+
+        # Spatial transformer localization-network
+        # TODO: this can be replaced with i.e. a dense block
+        if type.lower() == '2d':
+            self.localization = nn.Sequential(
+                nn.Conv2d(n_channels, 8, kernel_size=7),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv2d(8, 10, kernel_size=5),
+                nn.MaxPool2d(2, stride=2),
+                nn.ReLU(True)
+            )
+        elif type.lower() == '3d':
+            self.localization = nn.Sequential(
+                nn.Conv3d(n_channels, 8, kernel_size=7),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True),
+                nn.Conv3d(8, 10, kernel_size=5),
+                nn.MaxPool3d(2, stride=2),
+                nn.ReLU(True)
+            )
+
+        FCdims = 8640
+        FCfinal = 32
+
+        # Regressor for the 3 * 2 affine matrix - outputs the /theta vectors
+        if type.lower() == '2d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 3 * 2)
+            )
+            self.dims = [2, 3]
+
+            # Initialize the weights/bias with identity transformation
+            self.fc_loc[2].weight.data.zero_()
+            self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+        elif type.lower() == '3d':
+            self.fc_loc = nn.Sequential(
+                nn.Linear(FCdims, FCfinal), # TODO: get this number 211200 automatically
+                nn.ReLU(True),
+                nn.Linear(FCfinal, 4 * 3)
+            )
+            self.dims = [3, 4]
+
+            # Initialize the weights/bias with identity transformation
+            #self.fc_loc[2].weight.data.zero_()
+            #self.fc_loc[2].bias.data.copy_(torch.tensor([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def stn(self, x):
+        xs = self.localization(x)
+        # print("xs size = {}".format(xs.size()))
+        if x.dim() == 5:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3] * xs.size()[4]) # This is for 3D only
+        else:
+            xs = xs.view(-1, xs.size()[1] * xs.size()[2] * xs.size()[3])
+        theta = self.fc_loc(xs)
+        # print("theta size = {}".format(theta.size()))
+        theta = theta.view(-1, self.dims[0], self.dims[1])
+        #print("FA: theta = {}".format(theta))
+
+        grid = F.affine_grid(theta, self.target_grid_size, align_corners=False)
+        # print("grid size = {}".format(grid.size()))
+        x = F.grid_sample(x, grid, align_corners=False)
+
+        return x, theta
+
+    def forward(self, x):
+        out, affine = self.stn(x)
+        return out, affine
+
+#############################################################################################################
 
 class FCNConv3(nn.Module):
     def __init__(self, in_size, out_size, is_batchnorm, kernel_size=(3,3,1), padding_size=(1,1,0), init_stride=(1,1,1)):
@@ -128,13 +592,13 @@ class FCNConv3(nn.Module):
 
         if is_batchnorm:
             self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
-                                       nn.BatchNorm3d(out_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
                                        nn.ReLU(inplace=True),)
             self.conv2 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
-                                       nn.BatchNorm3d(out_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
                                        nn.ReLU(inplace=True),)
             self.conv3 = nn.Sequential(nn.Conv3d(out_size, out_size, kernel_size, 1, padding_size),
-                                       nn.BatchNorm3d(out_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True),
                                        nn.ReLU(inplace=True),)
         else:
             self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, init_stride, padding_size),
@@ -162,7 +626,7 @@ class UnetGatingSignal3(nn.Module):
 
         if is_batchnorm:
             self.conv1 = nn.Sequential(nn.Conv3d(in_size, in_size//2, (1,1,1), (1,1,1), (0,0,0)),
-                                       nn.BatchNorm3d(in_size//2),
+                                       nn.BatchNorm3d(in_size//2, track_running_stats=True),
                                        nn.ReLU(inplace=True),
                                        nn.AdaptiveAvgPool3d(output_size=self.fmap_size),
                                        )
@@ -194,7 +658,7 @@ class UnetGridGatingSignal3(nn.Module):
 
         if is_batchnorm:
             self.conv1 = nn.Sequential(nn.Conv3d(in_size, out_size, kernel_size, (1,1,1), (0,0,0)),
-                                       nn.BatchNorm3d(out_size),
+                                       nn.BatchNorm3d(out_size, track_running_stats=True), # OS
                                        nn.ReLU(inplace=True),
                                        )
         else:
@@ -257,10 +721,10 @@ class UnetUp3(nn.Module):
 
 
 class UnetUp3_CT(nn.Module):
-    def __init__(self, in_size, out_size, is_batchnorm=True):
+    def __init__(self, in_size, out_size, init_kernel=(3,3,3), init_padding =(1,1,1), init_stride=(1,1,1), is_batchnorm=True):
         super(UnetUp3_CT, self).__init__()
-        self.conv = UnetConv3(in_size + out_size, out_size, is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
-        self.up = nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear')
+        self.conv = UnetConv3(in_size + out_size, out_size, is_batchnorm, kernel_size=init_kernel, padding_size=init_padding, init_stride=init_stride)
+        self.up = nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear', align_corners=False)
 
         # initialise the blocks
         for m in self.children():
@@ -274,6 +738,86 @@ class UnetUp3_CT(nn.Module):
         outputs1 = F.pad(inputs1, padding)
         return self.conv(torch.cat([outputs1, outputs2], 1))
 
+# OS: Deformable conv
+class UnetUp3_CT_deformable(nn.Module):
+    def __init__(self, in_size, out_size, init_kernel=3, init_padding=1, is_batchnorm=True):
+        super(UnetUp3_CT_deformable, self).__init__()
+        self.conv = UnetConv3_deformable(in_size + out_size, out_size, is_batchnorm, kernel_size=init_kernel, padding_size=init_padding)
+        self.up = nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear', align_corners=False)
+
+        # initialise the blocks
+        for m in self.children():
+            if m.__class__.__name__.find('UnetConv3_deformable') != -1: continue
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs1, inputs2):
+        outputs2 = self.up(inputs2)
+        offset = outputs2.size()[2] - inputs1.size()[2]
+        padding = 2 * [offset // 2, offset // 2, 0]
+        outputs1 = F.pad(inputs1, padding)
+        out, _ = self.conv(torch.cat([outputs1, outputs2], 1))
+        return out
+
+# OS: My implementation of a dense upsampling block
+class UnetUp3_dense_CT(nn.Module):
+    def __init__(self, in_size, out_size, is_batchnorm=True, depth=3):
+        super(UnetUp3_dense_CT, self).__init__()
+        self.conv = UnetConv3(in_size + out_size, out_size, is_batchnorm, kernel_size=(3,3,3), padding_size=(1,1,1))
+        self.up = nn.Upsample(scale_factor=(2, 2, 2), mode='trilinear')
+
+        self.relu = nn.ReLU(inplace=False)
+        self.is_batchnorm = is_batchnorm
+
+        # Depth of the dense block
+        # -----------------------------------
+        if depth < 1:
+            depth = 1  # Minimal depth is 1
+        self.dense_depth = depth
+
+        # Initial convolution operation on the input data
+        self.init_conv = nn.Conv3d(in_size + out_size, out_size, kernel_size=(3,3,3), stride=(1,1,1), padding=(1,1,1))
+
+        # Define further convolutions in a for loop
+        self.ops_dict = {}
+        for ii in range(depth - 1):
+            name = "op_{}".format(ii + 1)
+            self.ops_dict[name] = nn.Conv3d((ii + 1) * out_size, out_size, kernel_size=(3,3,3), stride=(1,1,1), padding=(1,1,1)).cuda()
+
+        self.batchnorm = nn.BatchNorm3d(out_size, track_running_stats=True)
+
+        # initialise the blocks
+        for m in self.children():
+            if m.__class__.__name__.find('UnetConv3') != -1: continue
+            init_weights(m, init_type='kaiming')
+
+    def forward(self, inputs1, inputs2):
+        outputs2 = self.up(inputs2)
+        offset = outputs2.size()[2] - inputs1.size()[2]
+        padding = 2 * [offset // 2, offset // 2, 0]
+        outputs1 = F.pad(inputs1, padding)
+
+        # plug the input into the dense layer
+        input_to_dense = torch.cat([outputs1, outputs2], 1)
+
+        dense = self.init_conv(input_to_dense)
+        for ii in range(self.dense_depth - 1):
+            name = "op_{}".format(ii + 1)
+
+            # Batch (0) x Channels (1) x W x H x D
+            outcnn = self.relu(self.ops_dict[name](dense))
+
+            # Concatenate and relu
+            if ii == self.dense_depth - 2:
+                dense = self.relu(outcnn)
+            else:
+                dense = self.relu(torch.cat([dense, outcnn], 1))
+
+        # Apply batch normalization if required
+        if self.is_batchnorm:
+            dense = self.relu(self.batchnorm(dense))
+
+        # Output of the dense layer
+        return dense
 
 # Squeeze-and-Excitation Network
 class SqEx(nn.Module):
@@ -459,3 +1003,30 @@ class UnetDsv3(nn.Module):
 
     def forward(self, input):
         return self.dsv(input)
+
+# Save nifti file to disk
+def save_nifti(data, header=[], save_directory='.', savename='default_name'):
+    import SimpleITK as sitk
+    import os
+    import numpy as np
+
+    try:
+        # If the data is a pytorch variable, send it to cpu (assume it is on gpu)
+        data = data.detach().cpu().numpy()
+    except:
+        data = data
+
+    # Assume the last 3 dimensions of the data are the 3d image cube
+    if data.ndim == 5:
+        input_arr = np.squeeze(data[0, 0, ...].cpu().numpy()).astype(np.float32)
+    elif data.ndim == 4:
+        input_arr = np.squeeze(data[0, ...].cpu().numpy()).astype(np.float32)
+    else:
+        input_arr = data.astype(np.float32)
+
+    # Write the header and arrange data to write
+    input_img = sitk.GetImageFromArray(np.transpose(input_arr, (2, 1, 0)))
+    input_img.SetDirection([-1, 0, 0, 0, -1, 0, 0, 0, 1])
+
+    # Save the data as nifti
+    sitk.WriteImage(input_img, os.path.join(save_directory, '{}.nii.gz'.format(savename)))

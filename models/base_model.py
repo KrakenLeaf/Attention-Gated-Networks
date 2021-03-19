@@ -17,6 +17,12 @@ class BaseModel():
         self.which_epoch = int(0)
         self.path_pre_trained_model = None
 
+        # OS: for updating the lambda parameter of the Hausdorff distance
+        self.haus_flag = False
+
+        # Multi-processing
+        self.rank = 0
+
     def name(self):
         return 'BaseModel'
 
@@ -25,7 +31,9 @@ class BaseModel():
         self.isTrain = opt.isTrain
         self.ImgTensor = torch.cuda.FloatTensor if self.gpu_ids else torch.Tensor
         self.LblTensor = torch.cuda.FloatTensor if self.gpu_ids else torch.Tensor
-        self.save_dir = opt.save_dir; mkdir(self.save_dir)
+        self.save_dir = opt.save_dir
+        if opt.rank == 0:
+            mkdir(self.save_dir)
 
     def set_input(self, input):
         self.input = input
@@ -69,10 +77,31 @@ class BaseModel():
 
     # helper loading function that can be used by subclasses
     def load_network(self, network, network_label, epoch_label):
+        internal_lo_flag = 0 # OS # TODO: switch back to zero
         print('Loading the model {0} - epoch {1}'.format(network_label, epoch_label))
         save_filename = '{0:03d}_net_{1}.pth'.format(epoch_label, network_label)
         save_path = os.path.join(self.save_dir, save_filename)
-        network.load_state_dict(torch.load(save_path))
+        if internal_lo_flag == 0:
+            network.load_state_dict(torch.load(save_path)) # Original - load all dictionary, exactly
+        elif internal_lo_flag == 1:
+            # This is for a transfer learning experiment
+            # Exclude some layers from loading
+            pretrained_dict = torch.load(save_path)
+            model_dict = {k: v for k, v in pretrained_dict.items() if  k.find('dsv4.dsv.0.weight') == -1 and
+                                                                       k.find('dsv4.dsv.0.bias') == -1 and
+                                                                       k.find('dsv3.dsv.0.weight') == -1 and
+                                                                       k.find('dsv3.dsv.0.bias') == -1 and
+                                                                       k.find('dsv2.dsv.0.weight') == -1 and
+                                                                       k.find('dsv2.dsv.0.bias') == -1 and
+                                                                       k.find('dsv1.dsv.0.weight') == -1 and
+                                                                       k.find('dsv1.dsv.0.bias') == -1 and
+                                                                       k.find('dsv1.weight') == -1 and
+                                                                       k.find('dsv1.bias') == -1 and
+                                                                       k.find('final.weight') == -1 and
+                                                                       k.find('final.bias') == -1}
+            #pretrained_dict.update(pretrained_dict)
+            network.load_state_dict(model_dict, strict=False)
+
 
     def load_network_from_path(self, network, network_filepath, strict):
         network_label = os.path.basename(network_filepath)
@@ -88,7 +117,7 @@ class BaseModel():
             else:
                 scheduler.step()
             lr = self.optimizers[0].param_groups[0]['lr']
-        print('current learning rate = %.7f' % lr)
+        #print('current learning rate = %.7f' % lr)
 
     # returns the number of trainable parameters
     def get_number_parameters(self):

@@ -115,7 +115,7 @@ class FeedForwardClassifier(BaseModel):
 
     def validate(self):
         self.net.eval()
-        self.forward(split='test')
+        self.forward(split='test') # OS: shouldn't this be set to validation?
         self.loss = self.criterion(self.prediction, self.target)
         self.accumulate_results()
 

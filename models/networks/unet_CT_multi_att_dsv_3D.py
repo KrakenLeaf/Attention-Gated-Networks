@@ -109,7 +109,6 @@ class unet_CT_multi_att_dsv_3D(nn.Module):
 
         return log_p
 
-
 class MultiAttentionBlock(nn.Module):
     def __init__(self, in_size, gate_size, inter_size, nonlocal_mode, sub_sample_factor):
         super(MultiAttentionBlock, self).__init__()

@@ -9,6 +9,7 @@ from torch.nn import CrossEntropyLoss
 from utils.metrics import segmentation_scores, dice_score_list
 from sklearn import metrics
 from .layers.loss import *
+from .layers.loss_multi import *
 
 def get_optimizer(option, params):
     opt_alg = 'sgd' if not hasattr(option, 'optim') else option.optim
@@ -36,8 +37,18 @@ def get_criterion(opts):
             criterion = CrossEntropyLoss()
     elif opts.criterion == 'dice_loss':
         criterion = SoftDiceLoss(opts.output_nc)
-    elif opts.criterion == 'dice_loss_pancreas_only':
-        criterion = CustomSoftDiceLoss(opts.output_nc, class_ids=[0, 2])
+    elif opts.criterion == 'joint_loss':
+        # alpha + beta: Tevrsky loss regularizers.
+        # lam         : regularizer between the Tversky similarity and DICE dissimilarity
+        #criterion = jointloss(n_classes=opts.output_nc, alpha=opts.alpha, beta=opts.beta, lam=opts.lam, hausdorff=opts.hausdorff)
+        criterion = jointloss(n_classes=opts.output_nc, alpha=opts.alpha, beta=opts.beta, lam=opts.lam,
+                              hausdorff=opts.hausdorff, lambda_e=opts.energy_lambda, temp=opts.energy_temperature, thresh_m=opts.energy_threshold)
+    elif opts.criterion == 'joint_loss_multi':
+        # alpha + beta: Tevrsky loss regularizers.
+        # lam         : regularizer between the Tversky similarity and DICE dissimilarity
+        criterion = jointloss_multi(n_classes=opts.output_nc, alpha=opts.alpha, beta=opts.beta, lam=opts.lam, hausdorff=opts.hausdorff, rank=opts.rank)
+    elif opts.criterion == 'registration_loss':
+        criterion = registration_loss()
 
     return criterion
 
@@ -76,7 +87,11 @@ def adjust_learning_rate(optimizer, init_lr, epoch):
 def segmentation_stats(pred_seg, target):
     n_classes = pred_seg.size(1)
     pred_lbls = pred_seg.data.max(1)[1].cpu().numpy()
-    gt = np.squeeze(target.data.cpu().numpy(), axis=1)
+    #gt = np.squeeze(target.data.cpu().numpy(), axis=1)
+    if target.size()[0] > 1: # Batch of size 1
+        gt = np.squeeze(target.data.cpu().numpy()) #OS: previously raised an error for multimodal
+    else:
+        gt = target.data.cpu().numpy()
     gts, preds = [], []
     for gt_, pred_ in zip(gt, pred_lbls):
         gts.append(gt_)

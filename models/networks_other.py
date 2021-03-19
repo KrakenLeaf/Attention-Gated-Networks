@@ -39,13 +39,16 @@ def weights_init_kaiming(m):
     classname = m.__class__.__name__
     #print(classname)
     if classname.find('Conv') != -1:
-        init.kaiming_normal(m.weight.data, a=0, mode='fan_in')
+        #init.kaiming_normal(m.weight.data, a=0, mode='fan_in')
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
     elif classname.find('Linear') != -1:
-        init.kaiming_normal(m.weight.data, a=0, mode='fan_in')
+        #init.kaiming_normal(m.weight.data, a=0, mode='fan_in')
+        init.kaiming_normal_(m.weight.data, a=0, mode='fan_in')
     elif classname.find('BatchNorm') != -1:
-        init.normal(m.weight.data, 1.0, 0.02)
-        init.constant(m.bias.data, 0.0)
-
+        #init.normal(m.weight.data, 1.0, 0.02)
+        #init.constant(m.bias.data, 0.0)
+        init.normal_(m.weight.data, 1.0, 0.02)
+        init.constant_(m.bias.data, 0.0)
 
 def weights_init_orthogonal(m):
     classname = m.__class__.__name__
@@ -101,6 +104,9 @@ def get_scheduler(optimizer, opt):
         scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_iters, gamma=0.5)
     elif opt.lr_policy == 'step2':
         scheduler = lr_scheduler.StepLR(optimizer, step_size=opt.lr_decay_iters, gamma=0.1)
+    elif opt.lr_policy == 'onecyclelr':
+        # TODO: Need to set automatically!
+        scheduler = lr_scheduler.OneCycleLR(optimizer=optimizer, max_lr=1e-4, steps_per_epoch=192, epochs=opt.n_epochs)
     elif opt.lr_policy == 'plateau':
         print('schedular=plateau')
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, threshold=0.01, patience=5)

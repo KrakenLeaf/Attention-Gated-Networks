@@ -12,7 +12,7 @@ def get_dataset_transformation(name, opts=None):
     if opts: trans_obj.initialise(opts)
 
     # Print the input options
-    trans_obj.print()
+    #trans_obj.print()
 
     # Returns a dictionary of transformations
     return trans_obj.get_transformation()
