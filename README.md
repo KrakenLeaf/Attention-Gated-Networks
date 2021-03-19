@@ -3,28 +3,29 @@ This is a PyTorch implementation for GP-net [1] and STN-net [2]. Both networks a
 
 <p align="center">
     <img src="Subcortical.png" width="640"> <br />
-    <em> An example of automatic segmentation of the GPe/GPi (GP-net) and STN, SN and RN (STN-net).</em>
+    <em> An example of automatic segmentation of the GP externa/GP interna (GP-net) and STN, SN and RN (STN-net).</em>
 </p>
 
 
 
 ### How to work with the code
 * NOTE: This is not a comprehensive guide on how to use the code, as the program is given "as is" according to the attached license.
-* Main training script: train_segmentation.py. Requires a configuration file (can be found in the scripts folder).
+* Main training script: train_segmentation.py. Requires a configuration file (can be found in the scripts folder). <br />
 Usage: python train_segmentation.py --config configs/config_unet_onlu_gp.json
-* Main evaluation scripts: validation_gpe_gpi.py for GP-net and validation_stn_sn_rn for STN-net. Requires a configuration file (can be found in the scripts folder).
-Usage: python validation_gpe_gpi.py --config checkpoints/experiment_unet_ct_dsv_mri_gpe94/config_unet_only_gp.json
+* Main evaluation scripts: validation_gpe_gpi.py for GP-net and validation_stn_sn_rn for STN-net. Requires a configuration file (can be found in the scripts folder). <br />
+Usage: python validation_gpe_gpi.py --config checkpoints/experiment_unet_ct_dsv_mri_gpe94/config_unet_only_gp.json <br />
 Remember to set the "isTrain" flag to false and "which_epoch" variable to be the epoch number for the saved network name (i.e. 94 for the network parameters saved in "094_net_S.pth").
-* The configuration json file containts several training related flags and is relatively self explenatory. "data_path" is the name of the database over which we train. This folder (e.g. "db") should have three subfolders: "train", "test" and "validation" (for the evaluation scripts we can also use a folder named "test_val" for joint inference on both test and val folders). Each of these folders should contain a "label" and "image" subfolders. Within each of the "image" folders, the corresponding images should be stored in nifti format. In the label folder, corresponding nifti segmentation files should be stored (per each scan, a single nifti file containing all labels should exist). Keep in mind that there should be a 1-to-1 correspondance between the images and labels, so the same naming convention should be used to avoid confusion (e.g. P0.nii.gz, P1.nii.gz,...).
+* The configuration json file containts several training related flags and is relatively self explenatory. "data_path" is the name of the database over which we train. This folder (e.g. "db") should have three subfolders: "train", "test" and "validation" (for the evaluation scripts we can also use a folder named "test_val" for joint inference on both test and val folders). Each of these folders should contain a "label" and "image" subfolders. Within each of the "image" folders, the corresponding images should be stored in nifti format. In the label folder, corresponding nifti segmentation files should be stored (per each scan, a single nifti file containing all labels should exist). Keep in mind that there should be a 1-to-1 correspondance between the images and labels, so the same naming convention should be used to avoid confusion (e.g. P0.nii.gz, P1.nii.gz,...). <br />
 For example:
---my_db_folder
-	|--test
-		|--image
-			|--P0.nii.gz
-			|--P1.nii.gz
-		|--label
-			|--P0.nii.gz
-			|--P1.nii.gz
+--my_db_folder <br />
+	|--test <br />
+		|--image <br />
+			|--P0.nii.gz <br />
+			|--P1.nii.gz <br />
+		|--label <br />
+			|--P0.nii.gz <br />
+			|--P1.nii.gz <br />
+
 and similarly for "test", "val" or "test_val" (technically, these names can be changed within the code). Typically, pre-processing will include image/labels interpolation to an isotropic resolution grid and cropping to the same input size, for ease of use.
 
 
