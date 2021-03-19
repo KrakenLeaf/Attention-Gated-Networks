@@ -3,7 +3,7 @@ This is a PyTorch implementation for GP-net [1] and STN-net [2]. Both networks a
 
 <p align="center">
     <img src="Subcortical.png" width="640"> <br />
-    <em> Dice score comparison for GP-net and selected state-of-the-art atlas based segmentations.</em>
+    <em> An example of automatic segmentation of the GPe/GPi (GP-net) and STN, SN and RN (STN-net).</em>
 </p>
 
 
