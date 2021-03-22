@@ -18,7 +18,7 @@ Remember to set the "isTrain" flag to false and "which_epoch" variable to be the
 * The configuration json file containts several training related flags and is relatively self explanatory. "data_path" is the name of the database over which we train. This folder (e.g. "db") should have three subfolders: "train", "test" and "validation" (for the evaluation scripts we can also use a folder named "test_val" for joint inference on both test and val folders). Each of these folders should contain a "label" and "image" subfolders. Within each of the "image" folders, the corresponding images should be stored in nifti format. In the label folder, corresponding nifti segmentation files should be stored (per each scan, a single nifti file containing all labels should exist). Keep in mind that there should be a 1-to-1 correspondance between the images and labels, so the same naming convention should be used to avoid confusion (e.g. P0.nii.gz, P1.nii.gz,...). <br />
 For example:<br />
 my_db_folder <br />
-	- |--test <br />
+	- |--train <br />
 		- |--image <br />
 			- |--P0.nii.gz <br />
 			- |--P1.nii.gz <br />
@@ -32,8 +32,8 @@ and similarly for "test", "val" or "test_val" (technically, these names can be c
 ### References:
 1) Solomon O, Palnitkar T, Patriat R, et al. Deep-learning based fully automatic segmentation of the globus pallidus interna and externa using ultra-high 7 Tesla MRI. Hum Brain Mapp. 2021;1–18. https://doi.org/10.1002/hbm.25409  <br />
 2) Solomon O, Palnitkar T, Patriat R, et al., "STN/GP-nets: Fully automatic deep-learning based segmentation for DBS applications using ultra-high 7 Tesla MRI", International Society for Magnetic Resonance in Medicine (ISMRM) 2021
-3) "Attention-Gated Networks for Improving Ultrasound Scan Plane Detection", MIDL'18, Amsterdam <br />
-4) "Attention U-Net: Learning Where to Look for the Pancreas", MIDL'18, Amsterdam <br />
+3) Schlemper, Jo, et al. "Attention-Gated Networks for Improving Ultrasound Scan Plane Detection", MIDL'18, Amsterdam <br />
+4) Oktay, Ozan, et al. "Attention U-Net: Learning Where to Look for the Pancreas", MIDL'18, Amsterdam <br />
 
 
 ### Requirements (not a comprehensive list)
